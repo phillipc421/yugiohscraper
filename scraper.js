@@ -20,11 +20,66 @@ const getPackLinks = async (page) => {
 // for use on subpages, builds the actual card data objects
 const getCardData = async (page) => {
 	const data = {};
-	const setTitle = await page.$eval(
-		"#broad_title h1>strong",
-		(title) => title.textContent
-	);
-	console.log(setTitle);
+	try {
+		const setTitle = await page.$eval(
+			"#broad_title h1>strong",
+			(title) => title.textContent
+		);
+		// ( Release Date : 03/11/2022 ) -- format on website
+		const setReleaseDate = await page.$eval(
+			"#previewed",
+			(releaseDate) =>
+				releaseDate.textContent.match(/\d\d\/\d\d\/\d\d\d\d/g)[0]
+		);
+		data.setTitle = setTitle;
+		data.setReleaseDate = setReleaseDate;
+		// cards info is in <dl class="flex_1"> tags
+		data.cards = [];
+		const cardDls = await page.$$("dl.flex_1");
+		const cardDlPromises = cardDls.map(async (cardDl) => {
+			const cardName = await cardDl.$eval(
+				".card_name",
+				(cardName) => cardName.textContent
+			);
+			console.log(cardName);
+			const cardAttr = await cardDl.$eval(
+				".box_card_attribute>span",
+				(cardAttr) => cardAttr.textContent
+			);
+			console.log(cardAttr);
+			let cardLvl;
+			try {
+				cardLvl = await cardDl.$eval(
+					".box_card_level_rank.level>span",
+					(cardLvl) => cardLvl.textContent
+				);
+			} catch (e) {}
+
+			console.log(cardLvl);
+			let cardInfoSpecies;
+			try {
+				cardInfoSpecies = await cardDl.$eval(
+					".card_info_species_and_other_item>span",
+					(info) =>
+						info.textContent.slice(
+							info.textContent.indexOf("["),
+							info.textContent.indexOf("]")
+						)
+				);
+			} catch (e) {}
+
+			console.log(cardInfoSpecies);
+			return {
+				cardName,
+				cardAttr,
+				cardLvl,
+				cardSpeciesType: cardInfoSpecies,
+			};
+		});
+		Promise.allSettled(cardDlPromises).then((data) => console.log(data));
+	} catch (e) {
+		console.log(e);
+	}
 };
 
 // get links to all booster, structure deck, etc. pages
@@ -41,9 +96,6 @@ const loadMainPage = async () => {
 		await mainPage.close();
 		if (mainPage.isClosed()) {
 			loadSubPage(links[10], browser);
-			loadSubPage(links[15], browser);
-			loadSubPage(links[20], browser);
-			loadSubPage(links[34], browser);
 		}
 	} catch (e) {
 		console.error(e);
