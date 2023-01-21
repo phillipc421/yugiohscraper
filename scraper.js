@@ -146,7 +146,7 @@ const getCardData = async (page, link, browser) => {
 };
 
 // get links to all booster, structure deck, etc. pages
-const loadMainPage = async () => {
+const loadMainPage = async (getPackLinks, loadSubPage) => {
 	try {
 		// load puppeteer headless browser
 		const browser = await puppeteer.launch({
@@ -154,13 +154,14 @@ const loadMainPage = async () => {
 		});
 		const mainPage = await browser.newPage();
 		await mainPage.goto(URL, { waitUntil: ["domcontentloaded"] });
-		// makle sure page loaded.
+		// make sure page loaded.
 		console.log(URL + " loaded...");
 		const links = await getPackLinks(mainPage);
 		// close mainPage
 		await mainPage.close();
 		// loop through all links/pages and run the scraper
 		if (mainPage.isClosed()) {
+			console.log("its closed");
 			// await chunkLoad(10, links, browser);
 			await loadSubPage(links[6], browser);
 			console.log("Closing browser session...");
@@ -274,7 +275,7 @@ const getImageData = async (element, link, browser, URL_BASE, data) => {
 	// await imgPage.close();
 };
 
-loadMainPage();
+// loadMainPage(getPackLinks, loadSubPage);
 // colons do not throw an error but are invalid on windows. Causes empty files to be made.
 // fs.writeFile(
 // 	"C:\\Users\\phill\\development\\yugiohscraper\\ass: the balls.json",
@@ -282,3 +283,9 @@ loadMainPage();
 // ).catch((e) => console.log(e));
 
 // console.log(process.cwd());
+
+module.exports = {
+	loadMainPage,
+	getPackLinks,
+	loadSubPage,
+};
