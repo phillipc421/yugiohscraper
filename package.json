@@ -3,6 +3,7 @@
 		"test": "jest"
 	},
 	"dependencies": {
+		"postgres": "^3.3.3",
 		"puppeteer": "^19.5.2"
 	},
 	"devDependencies": {

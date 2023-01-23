@@ -1,10 +1,18 @@
 const puppeteer = require("puppeteer");
 const fs = require("fs/promises");
 const path = require("path");
+const db = require("./db");
 
 // official konami card database
 const URL = "https://www.db.yugioh-card.com/yugiohdb/card_list.action";
 const URL_BASE = "https://www.db.yugioh-card.com";
+
+const insertPacks = async (db, data) => {
+	const response =
+		await db`insert into packs (name, release_date, card_count, created_on, image_referer) values (${data.name}, ${data.release_date}, ${data.card_count}, ${data.timeStamp}, ${data.image_referer}) returning *`;
+	const { pack_id } = response[0];
+	return pack_id;
+};
 
 const getPackLinks = async (page) => {
 	const linkSelector = ".link_value"; // selector as of 1/12/23
@@ -34,9 +42,24 @@ const getCardData = async (page, link, browser) => {
 				releaseDate.textContent.match(/\d\d\/\d\d\/\d\d\d\d/g)[0]
 		);
 
+		// cards in set
+		const cardCount = await page.$eval(
+			".sort_set .text",
+			(cardCountText) => cardCountText.textContent.match(/\d+/g)[0]
+		);
+		data.cardCount = cardCount;
 		data.setTitle = setTitle;
 		data.setReleaseDate = setReleaseDate;
 		data.referer = URL_BASE + link;
+
+		const pack_id = await insertPacks(db, {
+			name: setTitle,
+			release_date: setReleaseDate,
+			card_count: cardCount,
+			timeStamp: Date(),
+			image_referer: URL_BASE + link,
+		});
+
 		// cards info is in <dl class="flex_1"> tags
 		// const cardDls = await page.$$("dl.flex_1");
 		const cardDls = await page.$$(".t_row.c_normal");
@@ -98,7 +121,7 @@ const getCardData = async (page, link, browser) => {
 				power.def = def;
 			}
 
-			let cardEffect;
+			let cardEffect = null;
 			try {
 				cardEffect = await cardDl.$eval(
 					".box_card_text.c_text.flex_1",
@@ -107,38 +130,40 @@ const getCardData = async (page, link, browser) => {
 				);
 			} catch (e) {}
 			if (!cardEffect) cardEffect = "Normal";
-			return cardAttr === "TRAP" || cardAttr === "SPELL"
-				? {
-						imgLink,
-						cardName,
-						cardAttr,
-						effectType,
-						cardEffect,
-				  }
-				: {
-						imgLink,
-						cardName,
-						cardAttr,
-						cardLvl,
-						cardInfoSpecies,
-						power,
-						cardEffect,
-				  };
+			return {
+				pack_id,
+				image: imgLink || null,
+				name: cardName || null,
+				attribute_type: cardAttr || null,
+				trap_spell_effect: effectType || null,
+				monster_level: cardLvl || null,
+				monster_type: cardInfoSpecies || null,
+				monster_atk: power?.atk?.split(" ")[1] || null,
+				monster_def: power?.def?.split(" ")[1] || null,
+				card_effect: cardEffect || null,
+				created_on: Date() || null,
+			};
 		});
 		// puppeteer .$eval() rejects if the css selector cannot be found...
 		// thus we use Promise.allSettled vs .all so the entire collection does not reject
 		return Promise.allSettled(cardDlPromises).then((results) => {
-			data.cards = results.map((result) => result.value);
-			data.cardsInSet = data.cards.length;
-			console.log("Writing file: ", data.setTitle + ".json");
-			fs.writeFile(
-				path.join(
-					process.cwd(),
-					"packs",
-					data.setTitle.replace(":", "_") + ".json"
-				),
-				JSON.stringify(data)
-			).catch((e) => console.log(e));
+			data.cards = results.map((result) => {
+				return result.value;
+			});
+
+			db`insert into cards ${db(data.cards)}`.then((results) =>
+				console.log(results)
+			);
+
+			// console.log("Writing file: ", data.setTitle + ".json");
+			// fs.writeFile(
+			// 	path.join(
+			// 		process.cwd(),
+			// 		"packs",
+			// 		data.setTitle.replace(":", "_") + ".json"
+			// 	),
+			// 	JSON.stringify(data)
+			// ).catch((e) => console.log(e));
 		});
 	} catch (e) {
 		console.log(e);
@@ -169,6 +194,7 @@ const loadMainPage = async (getPackLinks, loadSubPage) => {
 		}
 	} catch (e) {
 		console.error(e);
+		await browser.close();
 	}
 };
 
@@ -275,7 +301,8 @@ const getImageData = async (element, link, browser, URL_BASE, data) => {
 	// await imgPage.close();
 };
 
-// loadMainPage(getPackLinks, loadSubPage);
+loadMainPage(getPackLinks, loadSubPage);
+
 // colons do not throw an error but are invalid on windows. Causes empty files to be made.
 // fs.writeFile(
 // 	"C:\\Users\\phill\\development\\yugiohscraper\\ass: the balls.json",
