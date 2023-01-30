@@ -1,52 +1,83 @@
 const puppeteer = require("puppeteer");
 const fs = require("fs/promises");
-const path = require("path");
 const db = require("./db");
+const logger = require("./logger");
 
 // official konami card database
 const URL = "https://www.db.yugioh-card.com/yugiohdb/card_list.action";
 const URL_BASE = "https://www.db.yugioh-card.com";
 
 const insertPacks = async (db, data) => {
+	const start = Date.now();
 	const response =
 		await db`insert into packs (name, release_date, card_count, created_on, image_referer) values (${data.name}, ${data.release_date}, ${data.card_count}, ${data.timeStamp}, ${data.image_referer}) returning *`;
 	const { pack_id } = response[0];
+	const end = Date.now();
+	logger(
+		insertPacks.name,
+		data.name,
+		"Took",
+		(end - start) / 1000,
+		"seconds"
+	);
 	return pack_id;
 };
 
 const getPackLinks = async (page) => {
+	const start = Date.now();
 	const linkSelector = ".link_value"; // selector as of 1/12/23
 	try {
 		const results = await page.$$eval(linkSelector, (links) =>
 			links.map((link) => link.value)
 		);
-		console.log("Got links for each booster/deck...");
+		logger("Got links for each booster/deck...");
+		const end = Date.now();
+		logger(getPackLinks.name, "Took", (end - start) / 1000, "seconds");
 		return results;
 	} catch (e) {
-		console.log(e);
+		logger(e);
 	}
 };
 
+const getSetData = async () => {};
 // for use on subpages, builds the actual card data objects
-const getCardData = async (page, link, browser) => {
+const getCardData = async (page, link) => {
+	const start = Date.now();
 	const data = {};
 	try {
-		const setTitle = await page.$eval(
-			"#broad_title h1>strong",
-			(title) => title.textContent
-		);
-		// ( Release Date : 03/11/2022 ) -- format on website
-		const setReleaseDate = await page.$eval(
-			"#previewed",
-			(releaseDate) =>
-				releaseDate.textContent.match(/\d\d\/\d\d\/\d\d\d\d/g)[0]
-		);
+		let setTitle = "unnamed";
+		try {
+			setTitle = await page.$eval(
+				"#broad_title h1>strong",
+				(title) => title.textContent
+			);
+		} catch (e) {
+			logger(e);
+		}
 
-		// cards in set
-		const cardCount = await page.$eval(
-			".sort_set .text",
-			(cardCountText) => cardCountText.textContent.match(/\d+/g)[0]
-		);
+		let setReleaseDate = null;
+		try {
+			// ( Release Date : 03/11/2022 ) -- format on website
+			setReleaseDate = await page.$eval(
+				"#previewed",
+				(releaseDate) =>
+					releaseDate.textContent.match(/\d\d\/\d\d\/\d\d\d\d/g)[0]
+			);
+		} catch (e) {
+			logger(e);
+		}
+
+		let cardCount = "nocardcount";
+		try {
+			// cards in set
+			cardCount = await page.$eval(
+				".sort_set .text",
+				(cardCountText) => cardCountText.textContent.match(/\d+/g)[0]
+			);
+		} catch (e) {
+			logger(e);
+		}
+
 		data.cardCount = cardCount;
 		data.setTitle = setTitle;
 		data.setReleaseDate = setReleaseDate;
@@ -121,7 +152,7 @@ const getCardData = async (page, link, browser) => {
 				power.def = def;
 			}
 
-			let cardEffect = null;
+			let cardEffect;
 			try {
 				cardEffect = await cardDl.$eval(
 					".box_card_text.c_text.flex_1",
@@ -151,27 +182,26 @@ const getCardData = async (page, link, browser) => {
 				return result.value;
 			});
 
-			db`insert into cards ${db(data.cards)}`.then((results) =>
-				console.log(results)
-			);
-
-			// console.log("Writing file: ", data.setTitle + ".json");
-			// fs.writeFile(
-			// 	path.join(
-			// 		process.cwd(),
-			// 		"packs",
-			// 		data.setTitle.replace(":", "_") + ".json"
-			// 	),
-			// 	JSON.stringify(data)
-			// ).catch((e) => console.log(e));
+			return db`insert into cards ${db(data.cards)}`.then((results) => {
+				const end = Date.now();
+				logger(
+					getCardData.name,
+					data.setTitle,
+					"Took",
+					(end - start) / 1000,
+					"seconds"
+				);
+				logger(data.setTitle, "database done writing");
+				return data.setTitle;
+			});
 		});
 	} catch (e) {
-		console.log(e);
+		logger(e, data.setTitle);
 	}
 };
 
 // get links to all booster, structure deck, etc. pages
-const loadMainPage = async (getPackLinks, loadSubPage) => {
+const loadMainPage = async (getPackLinks, maxTabs) => {
 	try {
 		// load puppeteer headless browser
 		const browser = await puppeteer.launch({
@@ -180,17 +210,18 @@ const loadMainPage = async (getPackLinks, loadSubPage) => {
 		const mainPage = await browser.newPage();
 		await mainPage.goto(URL, { waitUntil: ["domcontentloaded"] });
 		// make sure page loaded.
-		console.log(URL + " loaded...");
+		logger(URL + " loaded...");
 		const links = await getPackLinks(mainPage);
 		// close mainPage
 		await mainPage.close();
 		// loop through all links/pages and run the scraper
 		if (mainPage.isClosed()) {
-			console.log("its closed");
-			// await chunkLoad(10, links, browser);
-			await loadSubPage(links[6], browser);
-			console.log("Closing browser session...");
+			logger("its closed");
+			await chunkLoad(maxTabs, links, browser);
+			// await loadSubPage(links[6], browser);
+			logger("Closing browser session...");
 			await browser.close();
+			await db.end();
 		}
 	} catch (e) {
 		console.error(e);
@@ -200,116 +231,62 @@ const loadMainPage = async (getPackLinks, loadSubPage) => {
 
 // load a new page for each link for efficiency?
 const loadSubPage = async (url, browser) => {
-	console.log("Loading subpage for " + url);
+	const start = Date.now();
+	// undefined url
+	if (!url) return;
+	logger("Loading subpage for " + url);
 	try {
 		const subPage = await browser.newPage();
 		await subPage.goto(URL_BASE + url, { waitUntil: ["domcontentloaded"] });
-		await getCardData(subPage, url, browser);
+		const setName = await getCardData(subPage, url);
 		// close sub page
-		console.log("Completed crawling: " + url);
-		console.log("Closing tab...");
+		logger("Completed crawling: " + url);
+		logger("Closing tab...");
 		await subPage.close();
+		const end = Date.now();
+		logger(
+			loadSubPage.name,
+			setName,
+			"Took",
+			(end - start) / 1000,
+			"seconds"
+		);
 	} catch (e) {
-		console.log("Error loading subpage...", e);
+		logger("Error loading subpage...", e);
 	}
 };
 
 // const chunk load tabs to prevent crash
 const chunkLoad = async (maxTabs, links, browser) => {
-	for (let i = 0; i < links.length; i += maxTabs) {
-		console.log("Processing: ", i, i + maxTabs - 1);
+	const linksLength = links.length;
+	for (let i = 0; i < linksLength; i += maxTabs) {
+		const start = Date.now();
+		logger("Processing links: ", i, i + maxTabs - 1);
 		const promises = [];
 		for (j = i; j < i + maxTabs; j++) {
 			promises.push(loadSubPage(links[j], browser));
 		}
 		// do not continue until this chunk of pages is done
 		await Promise.allSettled(promises);
+		const end = Date.now();
+		logger(
+			chunkLoad.name,
+			"Chunks",
+			i,
+			"to",
+			i + maxTabs - 1,
+			"Took",
+			(end - start) / 1000,
+			"seconds"
+		);
 	}
 };
 
 // images on the site only come back if the referer header is the current url
 // image comes back as an octet/stream
-const getImageData = async (element, link, browser, URL_BASE, data) => {
-	// console.log("ELEMENT", element);
-
-	const imageSource = await element.$eval(
-		"div.box_card_img>img",
-		(img) => img.src
-	);
-	console.log("IMAGE", imageSource);
-	try {
-		const response = await fetch(imageSource, {
-			headers: {
-				Referer: URL_BASE + link,
-			},
-		});
-		const imgData = await response.arrayBuffer();
-		await fs.writeFile(
-			path.join(
-				process.cwd(),
-				"packs",
-				data.setTitle.replace(":", "_") + ".png"
-			),
-			Buffer.from(imgData)
-		);
-	} catch (e) {
-		console.log(e);
-	}
-
-	// load image in new page with referer set to origin page
-	// const imgPage = await browser.newPage();
-	// listen for responses
-	// imgPage.on("response", async (res) => {
-	// 	if (res.request().method() === "OPTIONS") {
-	// 		console.log("Was a preflight");
-	// 		return;
-	// 	}
-	// 	if (res.headers()["content-type"].includes("octet-stream")) {
-	// 		console.log(res.url());
-	// 		setTimeout(async () => {
-	// 			try {
-	// 				const imgBuffer = await res.buffer();
-	// 				console.log("THE BUFFER", imgBuffer);
-
-	// 				await fs.writeFile(
-	// 					path.join(process.cwd(), "packs", "myimg.png"),
-	// 					imgBuffer,
-	// 					"base64"
-	// 				);
-	// 			} catch (e) {
-	// 				console.log(e);
-	// 			}
-	// 		}, 1000);
-	// 	}
-	// });
-	// const response = await imgPage.goto(imageSource, {
-	// 	referer: URL_BASE + link,
-	// });
-	// const response = await imgPage.goto(imageSource);
-	console.log("RESPONSE", response);
-	// const imgBuffer = await imgPageResponse.buffer();
-	// // write img
-	// await fs.writeFile(
-	// 	path.join(
-	// process.cwd(),
-	// "packs",
-	// data.setTitle.replace(":", "_") + ".png"
-	// 	),
-	// 	imgBuffer
-	// );
-	// close img page
-	// await imgPage.close();
-};
-
-loadMainPage(getPackLinks, loadSubPage);
-
 // colons do not throw an error but are invalid on windows. Causes empty files to be made.
-// fs.writeFile(
-// 	"C:\\Users\\phill\\development\\yugiohscraper\\ass: the balls.json",
-// 	"{'data': 'mydata'}"
-// ).catch((e) => console.log(e));
 
-// console.log(process.cwd());
+loadMainPage(getPackLinks, 7);
 
 module.exports = {
 	loadMainPage,
