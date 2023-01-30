@@ -16,8 +16,8 @@ const dupeChecks = async (data) => {
 	});
 	console.log("total dupes:", dupeCount);
 	// log it
-	await fs.writeFile("sets.txt", data.join("\n"), "utf-8");
-	await fs.writeFile("dupes.json", JSON.stringify(dupes), "utf-8");
+	// await fs.writeFile("sets.txt", data.join("\n"), "utf-8");
+	// await fs.writeFile("dupes.json", JSON.stringify(dupes), "utf-8");
 };
 
 const main = async () => {
