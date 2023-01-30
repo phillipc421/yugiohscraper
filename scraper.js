@@ -39,9 +39,7 @@ const getPackLinks = async (page) => {
 	}
 };
 
-const getSetData = async () => {};
-// for use on subpages, builds the actual card data objects
-const getCardData = async (page, link) => {
+const getSetData = async (page, link) => {
 	const start = Date.now();
 	const data = {};
 	try {
@@ -90,12 +88,27 @@ const getCardData = async (page, link) => {
 			timeStamp: Date(),
 			image_referer: URL_BASE + link,
 		});
-
+		const end = Date.now();
+		logger(
+			getSetData.name,
+			data.setTitle,
+			"Took",
+			(end - start) / 1000,
+			"seconds"
+		);
+		return pack_id;
+	} catch (e) {
+		logger(e);
+	}
+};
+// for use on subpages, builds the actual card data objects
+const getCardData = async (page, pack_id) => {
+	const start = Date.now();
+	try {
 		// cards info is in <dl class="flex_1"> tags
 		// const cardDls = await page.$$("dl.flex_1");
 		const cardDls = await page.$$(".t_row.c_normal");
 		const cardDlPromises = cardDls.map(async (cardDl) => {
-			// await getImageData(cardDl, link, browser, URL_BASE, data);
 			const imgLink = await cardDl.$eval(
 				"div.box_card_img>img",
 				(img) => img.src
@@ -178,25 +191,24 @@ const getCardData = async (page, link) => {
 		// puppeteer .$eval() rejects if the css selector cannot be found...
 		// thus we use Promise.allSettled vs .all so the entire collection does not reject
 		return Promise.allSettled(cardDlPromises).then((results) => {
-			data.cards = results.map((result) => {
+			const cards = results.map((result) => {
 				return result.value;
 			});
 
-			return db`insert into cards ${db(data.cards)}`.then((results) => {
+			return db`insert into cards ${db(cards)}`.then((results) => {
 				const end = Date.now();
 				logger(
 					getCardData.name,
-					data.setTitle,
+					pack_id,
 					"Took",
 					(end - start) / 1000,
 					"seconds"
 				);
-				logger(data.setTitle, "database done writing");
-				return data.setTitle;
+				logger(pack_id, "database done writing");
 			});
 		});
 	} catch (e) {
-		logger(e, data.setTitle);
+		logger(e, pack_id);
 	}
 };
 
@@ -238,7 +250,8 @@ const loadSubPage = async (url, browser) => {
 	try {
 		const subPage = await browser.newPage();
 		await subPage.goto(URL_BASE + url, { waitUntil: ["domcontentloaded"] });
-		const setName = await getCardData(subPage, url);
+		const pack_id = await getSetData(subPage, url);
+		await getCardData(subPage, pack_id);
 		// close sub page
 		logger("Completed crawling: " + url);
 		logger("Closing tab...");
@@ -246,7 +259,7 @@ const loadSubPage = async (url, browser) => {
 		const end = Date.now();
 		logger(
 			loadSubPage.name,
-			setName,
+			pack_id,
 			"Took",
 			(end - start) / 1000,
 			"seconds"
